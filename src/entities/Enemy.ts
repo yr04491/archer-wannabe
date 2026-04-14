@@ -24,6 +24,7 @@ export class Enemy extends Phaser.GameObjects.Rectangle {
     const body = this.body as Phaser.Physics.Arcade.Body
     body.setSize(def.width, def.height)
     body.setCollideWorldBounds(true)
+    body.pushable = false
 
     // HPバー背景
     this.hpBarBg = scene.add.rectangle(x, y - def.height / 2 - 8, def.width, 4, 0x333333)
@@ -31,12 +32,17 @@ export class Enemy extends Phaser.GameObjects.Rectangle {
     this.hpBar = scene.add.rectangle(x, y - def.height / 2 - 8, def.width, 4, 0xff4444)
   }
 
-  moveToward(targetX: number, targetY: number, others?: Phaser.GameObjects.GameObject[]): void {
+  moveToward(
+    targetX: number,
+    targetY: number,
+    others?: Phaser.GameObjects.GameObject[],
+    avoidPositions?: { x: number; y: number; radius: number }[],
+  ): void {
     const angle = Phaser.Math.Angle.Between(this.x, this.y, targetX, targetY)
     let vx = Math.cos(angle) * this.speed
     let vy = Math.sin(angle) * this.speed
 
-    // 近くの敵から離れる分離ステアリング
+    // 敵同士の分離ステアリング
     if (others) {
       const separationRadius = this.width * 2
       for (const obj of others) {
@@ -46,6 +52,19 @@ export class Enemy extends Phaser.GameObjects.Rectangle {
         if (dist < separationRadius && dist > 0) {
           const sepAngle = Phaser.Math.Angle.Between(other.x, other.y, this.x, this.y)
           const force = (1 - dist / separationRadius) * this.speed * 2
+          vx += Math.cos(sepAngle) * force
+          vy += Math.sin(sepAngle) * force
+        }
+      }
+    }
+
+    // 指定座標（プレイヤーなど）への反発ステアリング
+    if (avoidPositions) {
+      for (const pos of avoidPositions) {
+        const dist = Phaser.Math.Distance.Between(this.x, this.y, pos.x, pos.y)
+        if (dist < pos.radius && dist > 0) {
+          const sepAngle = Phaser.Math.Angle.Between(pos.x, pos.y, this.x, this.y)
+          const force = (1 - dist / pos.radius) * this.speed * 3
           vx += Math.cos(sepAngle) * force
           vy += Math.sin(sepAngle) * force
         }

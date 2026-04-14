@@ -9,6 +9,9 @@ import { getEnemyDef } from '../data/enemies'
 import { getWeaponDef } from '../data/weapons'
 import { SKILLS } from '../data/skills'
 
+const MARGIN = 4   // ステージ枠の余白(px)
+const STATUS_H = 50 // ステータスバーの高さ
+
 interface GameSceneData {
   stageIndex: number
   roomIndex: number
@@ -26,6 +29,8 @@ export class GameScene extends Phaser.Scene {
   private roomIndex: number = 0
   private acquiredSkills: string[] = []
   private isClearing: boolean = false
+  private isPaused: boolean = false
+  private pauseOverlay!: Phaser.GameObjects.Container
 
   constructor() {
     super({ key: 'GameScene' })
@@ -36,6 +41,7 @@ export class GameScene extends Phaser.Scene {
     this.roomIndex = data.roomIndex ?? 0
     this.acquiredSkills = data.acquiredSkills ?? []
     this.isClearing = false
+    this.isPaused = false
   }
 
   create(): void {
@@ -44,6 +50,15 @@ export class GameScene extends Phaser.Scene {
 
     // 背景
     this.add.rectangle(width / 2, height / 2, width, height, stage.backgroundColor)
+
+    // ステージ枠線（余白付き）
+    const frameTop = STATUS_H + MARGIN
+    const frameH = height - STATUS_H - MARGIN * 2
+    this.add
+      .rectangle(width / 2, frameTop + frameH / 2, width - MARGIN * 2, frameH)
+      .setStrokeStyle(1, 0x888888, 0.6)
+      .setFillStyle(0x000000, 0)
+      .setDepth(1)
 
     // プレイヤー
     this.player = new Player(this, width / 2, height / 2)
@@ -90,31 +105,27 @@ export class GameScene extends Phaser.Scene {
       },
     )
 
-    // 衝突判定: プレイヤー vs 敵（物理分離 + ダメージ）
-    this.physics.add.collider(
-      this.player,
-      this.enemies,
-      (_player, enemy) => {
-        const e = enemy as Enemy
-        this.player.takeDamage(e.damage) // Player の無敵時間でレート制限
-        if (this.player.isDead()) this.gameOver()
-      },
+    // 敵同士・プレイヤーとの分離はステアリングで処理（コライダーなし）
+
+    // 物理の境界（余白を考慮）
+    this.physics.world.setBounds(
+      MARGIN, STATUS_H + MARGIN,
+      width - MARGIN * 2, height - STATUS_H - MARGIN * 2,
     )
 
-    // 衝突判定: 敵同士（物理分離のみ）
-    this.physics.add.collider(this.enemies, this.enemies)
+    // ---- UI ----
+    // ステータスバー背景
+    this.add
+      .rectangle(width / 2, STATUS_H / 2, width, STATUS_H, 0x000000, 0.6)
+      .setScrollFactor(0)
+      .setDepth(9)
 
-    // UI
-    const padX = 80
-    const padY = height - 100
-    this.virtualPad = new VirtualPad(this, padX, padY)
-
-    this.hpBar = new HpBar(this, 16, 25)
+    this.hpBar = new HpBar(this, 16, STATUS_H / 2)
     this.hpBar.update(this.player.hp, this.player.maxHp)
 
     const totalRooms = stage.rooms.length
     this.add
-      .text(width - 16, 25, `部屋 ${this.roomIndex + 1}/${totalRooms}`, {
+      .text(width / 2, STATUS_H / 2, `部屋 ${this.roomIndex + 1}/${totalRooms}`, {
         fontSize: '20px',
         color: '#ffffff',
         fontFamily: 'Arial',
@@ -122,20 +133,99 @@ export class GameScene extends Phaser.Scene {
       })
       .setScrollFactor(0)
       .setDepth(10)
+      .setOrigin(0.5)
+
+    // ポーズボタン
+    this.createPauseButton()
+
+    // ポーズオーバーレイ（初期は非表示）
+    this.pauseOverlay = this.createPauseOverlay()
+    this.pauseOverlay.setVisible(false)
+
+    // バーチャルパッド
+    const padX = 80
+    const padY = height - 100
+    this.virtualPad = new VirtualPad(this, padX, padY)
+  }
+
+  private createPauseButton(): void {
+    const { width } = this.scale
+    const btn = this.add
+      .text(width - 16, STATUS_H / 2, '⏸', {
+        fontSize: '24px',
+        color: '#ffffff',
+      })
       .setOrigin(1, 0.5)
-
-    // ステータスバー背景
-    this.add
-      .rectangle(width / 2, 25, width, 50, 0x000000, 0.6)
       .setScrollFactor(0)
-      .setDepth(9)
+      .setDepth(10)
+      .setInteractive()
 
-    // 物理の境界
-    this.physics.world.setBounds(0, 50, width, height - 50)
+    btn.on('pointerdown', () => this.togglePause())
+  }
+
+  private createPauseOverlay(): Phaser.GameObjects.Container {
+    const { width, height } = this.scale
+    const container = this.add.container(0, 0).setDepth(50)
+
+    const bg = this.add.rectangle(width / 2, height / 2, width, height, 0x000000, 0.75)
+
+    const title = this.add
+      .text(width / 2, height * 0.35, 'PAUSE', {
+        fontSize: '48px',
+        color: '#ffffff',
+        fontFamily: 'Arial',
+        fontStyle: 'bold',
+      })
+      .setOrigin(0.5)
+
+    const resumeBg = this.add
+      .rectangle(width / 2, height * 0.52, 220, 54, 0xffffff)
+      .setInteractive()
+    const resumeLabel = this.add
+      .text(width / 2, height * 0.52, '再開', {
+        fontSize: '22px',
+        color: '#000000',
+        fontFamily: 'Arial',
+        fontStyle: 'bold',
+      })
+      .setOrigin(0.5)
+    resumeBg.on('pointerdown', () => this.togglePause())
+
+    const titleBg = this.add
+      .rectangle(width / 2, height * 0.65, 220, 54, 0x555555)
+      .setInteractive()
+    const titleLabel = this.add
+      .text(width / 2, height * 0.65, 'タイトルへ', {
+        fontSize: '22px',
+        color: '#ffffff',
+        fontFamily: 'Arial',
+        fontStyle: 'bold',
+      })
+      .setOrigin(0.5)
+    titleBg.on('pointerdown', () => {
+      this.physics.world.resume()
+      this.scene.start('TitleScene')
+    })
+
+    container.add([bg, title, resumeBg, resumeLabel, titleBg, titleLabel])
+    return container
+  }
+
+  private togglePause(): void {
+    this.isPaused = !this.isPaused
+    if (this.isPaused) {
+      this.physics.world.pause()
+      this.tweens.pauseAll()
+      this.pauseOverlay.setVisible(true)
+    } else {
+      this.physics.world.resume()
+      this.tweens.resumeAll()
+      this.pauseOverlay.setVisible(false)
+    }
   }
 
   update(_time: number, delta: number): void {
-    if (this.isClearing) return
+    if (this.isClearing || this.isPaused) return
 
     // プレイヤー移動
     const speed = this.player.moveSpeed
@@ -145,14 +235,26 @@ export class GameScene extends Phaser.Scene {
       this.virtualPad.dy * speed,
     )
 
-    this.player.update(delta)
-
-    // 敵の更新（隣接敵リストを渡して分離ステアリング適用）
+    // 敵の更新（敵同士 + プレイヤーへの反発ステアリング適用）
     const allEnemies = this.enemies.getChildren()
+    const playerRepulsor = [{ x: this.player.x, y: this.player.y, radius: 40 }]
     for (const obj of allEnemies) {
       const enemy = obj as Enemy
-      enemy.moveToward(this.player.x, this.player.y, allEnemies)
+      enemy.moveToward(this.player.x, this.player.y, allEnemies, playerRepulsor)
       enemy.update()
+
+      // 接触中の敵が攻撃インターバルを満たしたらダメージ
+      const dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, enemy.x, enemy.y)
+      if (dist < 32) {
+        if (enemy.tryAttack(delta)) {
+          this.showDamageNumber(this.player.x, this.player.y, enemy.damage)
+          this.player.takeDamage(enemy.damage)
+          if (this.player.isDead()) {
+            this.gameOver()
+            return
+          }
+        }
+      }
     }
 
     // 弾の境界チェック
@@ -192,6 +294,29 @@ export class GameScene extends Phaser.Scene {
     proj.fire(nearest.x, nearest.y, this.player.bulletSpeed)
   }
 
+  private showDamageNumber(x: number, y: number, amount: number): void {
+    const text = this.add
+      .text(x, y - 20, `-${amount}`, {
+        fontSize: '24px',
+        color: '#ff4444',
+        fontFamily: 'Arial',
+        fontStyle: 'bold',
+        stroke: '#000000',
+        strokeThickness: 3,
+      })
+      .setOrigin(0.5)
+      .setDepth(20)
+
+    this.tweens.add({
+      targets: text,
+      y: y - 70,
+      alpha: 0,
+      duration: 800,
+      ease: 'Power2',
+      onComplete: () => text.destroy(),
+    })
+  }
+
   private getNearestEnemy(): Enemy | null {
     let nearest: Enemy | null = null
     let minDist = Infinity
@@ -211,8 +336,8 @@ export class GameScene extends Phaser.Scene {
     const minDist = 150
     let x: number, y: number
     do {
-      x = Phaser.Math.Between(40, width - 40)
-      y = Phaser.Math.Between(90, height - 40)
+      x = Phaser.Math.Between(MARGIN + 20, width - MARGIN - 20)
+      y = Phaser.Math.Between(STATUS_H + MARGIN + 20, height - MARGIN - 20)
     } while (Phaser.Math.Distance.Between(x, y, width / 2, height / 2) < minDist)
     return { x, y }
   }
@@ -235,10 +360,6 @@ export class GameScene extends Phaser.Scene {
           stageIndex: this.stageIndex,
           roomIndex: this.roomIndex + 1,
           acquiredSkills: this.acquiredSkills,
-          playerHp: this.player.hp,
-          playerMaxHp: this.player.maxHp,
-          fireInterval: this.player.fireInterval,
-          bulletDamage: this.player.bulletDamage,
         })
       }
     })
